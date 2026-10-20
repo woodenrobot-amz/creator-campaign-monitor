@@ -1,0 +1,20 @@
+import {readFileSync} from 'node:fs';
+import {gzipSync,strToU8,zipSync,gunzipSync,strFromU8} from 'fflate';
+import {parseCampaignCsv,readReport} from '../src/importer';
+import {buildMatches,emptyControls,isAvailable,type Campaign} from '../src/model';
+const [acceptedPath,activePath]=process.argv.slice(2);
+if(!acceptedPath||!activePath)throw new Error('Usage: npm run test:real -- accepted.csv active.csv');
+const ids=new Set<string>(),asins=new Set<string>();
+const acceptedText=readFileSync(acceptedPath,'utf8');
+const a=parseCampaignCsv(acceptedText,'accepted',c=>{ids.add(c.id);for(const asin of c.asins)asins.add(asin);});
+const campaigns:Campaign[]=[];
+const b=parseCampaignCsv(readFileSync(activePath,'utf8'),'active',c=>campaigns.push(c));
+const matches=buildMatches(campaigns,ids,asins,emptyControls(),undefined,'2026-10-20');
+const acceptedBytes=gzipSync(strToU8(JSON.stringify({ids:[...ids].sort(),asins:[...asins].sort()})),{level:6});
+const activeBytes=gzipSync(strToU8(JSON.stringify({campaigns})),{level:6});
+if(JSON.parse(strFromU8(gunzipSync(acceptedBytes))).asins.length!==asins.size)throw new Error('Compression round trip failed');
+// Exercise the actual streaming ZIP importer on the real accepted export.
+const zipped=zipSync({'accepted.csv':strToU8(acceptedText)});let zipRows=0;
+await readReport(new File([zipped as BlobPart],'accepted.zip'),text=>{zipRows+=parseCampaignCsv(text,'accepted',()=>{});},()=>{});
+if(zipRows!==a)throw new Error('ZIP row reconciliation failed');
+console.log(JSON.stringify({acceptedRows:a,activeRows:b,uniqueWatched:asins.size,matches:matches.length,available:matches.filter(m=>isAvailable(m.campaign as Campaign,'2026-10-20')).length,acceptedCompressedMB:acceptedBytes.length/1048576,activeCompressedMB:activeBytes.length/1048576,zipRoundTripRows:zipRows},null,2));

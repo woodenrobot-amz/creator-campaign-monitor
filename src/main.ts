@@ -1,0 +1,72 @@
+import './style.css';
+import {client,heads,load,save,type Head} from './lib/supabase/store';
+import {engine} from './engine';
+import {emptyControls,manualAsins,isAvailable,type Campaign,type Controls,type Filters,type ImportInfo,type Kind,type Overview} from './model';
+const app=document.querySelector<HTMLDivElement>('#app')!;
+let controls:Controls=emptyControls(),saved:Head[]=[],view:Overview={watched:0,acceptedIds:0,matches:[],total:0,available:0,newCount:0};
+let busy=false, message='',error='',ready=false,queryVersion=0;
+const filters:Filters={query:'',manual:false,available:true,newOnly:false,hideReviewed:false,page:0};
+const esc=(s:unknown)=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]!));
+const fmt=(n:number)=>n.toLocaleString();
+const date=(s?:string)=>s?new Date(s).toLocaleString(): 'Never imported';
+const today=()=>new Date().toLocaleDateString('en-CA',{timeZone:'America/New_York'});
+function banner(){document.querySelector('#status')!.innerHTML=`${error?`<p class="error" role="alert">${esc(error)}</p>`:''}${message?`<p role="status">${esc(message)}</p>`:''}`;}
+function status(s:string){message=s;banner();}
+async function query(){const version=++queryVersion;const result=await engine<Overview>('query',{controls,filters});if(version!==queryVersion)return;view=result;renderResults();}
+async function restore(){
+ busy=true;error='';render();
+ try{saved=await heads();for(const h of saved){status(`Loading ${h.kind}…`);await engine('load',{kind:h.kind,bytes:await load(h)});}controls=await engine<Controls>('getControls');ready=true;await query();message='';}
+ catch(e){error=`Could not load saved data: ${e instanceof Error?e.message:JSON.stringify(e)}. If this is a new project, apply the database migration first.`;ready=false;}
+ finally{busy=false;render();}
+}
+async function run(action:()=>Promise<void>){if(busy||!ready)return;busy=true;error='';render();try{await action();}catch(e){error=e instanceof Error?e.message:JSON.stringify(e);message='Save failed. Reload before retrying if the connection was interrupted.';await engine('discard');}finally{busy=false;render();}}
+async function upload(kind:'accepted'|'active',file:File){await run(async()=>{
+ status('Validating all CSV files in the report…');
+ const result=await engine<{bytes:Uint8Array;info:ImportInfo;duplicates:number}>('import',{kind,file},status);
+ const old=saved.find(h=>h.kind===kind);
+ const history=[result.info,...(Array.isArray(old?.summary.history)?old.summary.history:[])].slice(0,12);
+ const summary={...result.info,duplicates:result.duplicates,history};
+ const head=await save(kind,result.bytes,saved.find(h=>h.kind===kind)?.batch_id??null,summary,status);
+ saved=saved.filter(h=>h.kind!==kind).concat(head);
+ view=await engine<Overview>('commit',{filters});filters.page=0;await query();
+ message=`Imported ${fmt(result.info.campaigns)} campaigns from ${result.info.files} CSV file(s). ${result.duplicates?fmt(result.duplicates)+' duplicate rows merged.':''}`;
+ });}
+async function updateControls(next:Controls){await run(async()=>{
+ const bytes=await engine<Uint8Array>('controls',{controls:next});
+ try{const head=await save('controls',bytes,saved.find(h=>h.kind==='controls')?.batch_id??null,{},status);saved=saved.filter(h=>h.kind!=='controls').concat(head);controls=next;filters.page=0;await query();message='Watchlist saved.';}catch(e){await engine('controls',{controls});throw e;}
+ });}
+function render(){
+ app.innerHTML=`<header><a class="brand" href="/">WR<span>CREATOR CAMPAIGN MONITOR</span></a><button id="logout" class="quiet">Sign out</button></header><main><div class="eyebrow">YOUR WEEKLY OPPORTUNITY CHECK</div><h1>Keep your next campaign<br><span>on the radar.</span></h1><p class="intro">Upload your Amazon reports. Find campaigns for products you already promote.</p><div id="status" aria-live="polite"></div>
+ <section class="uploads">${(['accepted','active'] as const).map(kind=>{const h=saved.find(x=>x.kind===kind);return `<article class="upload"><div class="step">${kind==='accepted'?'01 / BUILD YOUR WATCHLIST':'02 / FIND OPPORTUNITIES'}</div><h2>${kind==='accepted'?'Accepted Campaigns':'All Active Campaigns'}</h2><p>${kind==='accepted'?'Adds every included ASIN to your permanent watchlist.':'Checks all CSVs in the ZIP against your watched products.'}</p><label class="upload-button">Upload ${kind==='accepted'?'accepted':'active'} ZIP<input type="file" data-upload="${kind}" accept=".zip,.csv" ${busy||!ready?'disabled':''}></label><div class="import-meta">${esc(date(h?.updated_at))}${h?`<br>${esc(h.summary.filename)} · ${fmt(Number(h.summary.campaigns??0))} campaigns`:''}</div></article>`;}).join('')}</section>
+ <div class="metrics"><article><strong>${fmt(view.watched)}</strong><span>Imported watched ASINs</span></article><article><strong>${fmt(controls.watches.filter(w=>!w.paused).length)}</strong><span>Manual watches</span></article><article><strong>${fmt(view.available)}</strong><span>Available matches</span></article><article><strong>${fmt(view.newCount)}</strong><span>New / reopened campaigns</span></article></div>
+ <section class="watch-panel"><div><div class="eyebrow">WATCH SOMETHING SPECIFIC</div><h2>Add products to your radar</h2><p>Paste ASINs or full Amazon product URLs. Separate multiple products with spaces or commas.</p></div><form id="watch-form"><textarea id="asins" placeholder="B0XXXXXXXX or https://www.amazon.com/dp/…" aria-label="ASINs or Amazon product URLs" required></textarea><input id="note" placeholder="Optional product name or note" aria-label="Watch note"><button ${busy||!ready?'disabled':''}>Add to watchlist</button></form><details><summary>Manage manual watches and exclusions (${controls.watches.length+controls.excluded.length})</summary><div class="watch-list">${controls.watches.map(w=>`<div><code>${esc(w.asin)}</code> ${esc(w.note)} <button data-pause="${w.asin}" ${busy?'disabled':''}>${w.paused?'Resume':'Pause'}</button><button data-remove="${w.asin}" ${busy?'disabled':''}>Remove / exclude</button></div>`).join('')}${controls.excluded.map(a=>`<div><code>${esc(a)}</code> Excluded <button data-restore="${a}" ${busy?'disabled':''}>Restore</button></div>`).join('')}</div></details></section>
+ <section class="results-section"><div class="results-heading"><div><div class="eyebrow">CAMPAIGN MATCHES</div><h2>Your opportunities</h2></div><button id="reload" class="quiet" ${busy?'disabled':''}>Reload saved data</button></div><div class="filters"><input id="search" aria-label="Search matches" placeholder="Search brand, campaign or ASIN" value="${esc(filters.query)}">${[['available','Available only'],['manual','Manual watches only'],['newOnly','New / reopened only'],['hideReviewed','Hide reviewed']].map(([k,label])=>`<label><input type="checkbox" data-filter="${k}" ${filters[k as keyof Filters]?'checked':''}>${label}</label>`).join('')}</div><div id="results"></div></section>
+ <details><summary>Recent imports</summary>${saved.filter(h=>h.kind!=='controls').map(h=>`<h3>${h.kind==='accepted'?'Accepted campaigns':'All active campaigns'}</h3>${(Array.isArray(h.summary.history)?h.summary.history:[]).map((i:ImportInfo)=>`<p class="count">${esc(date(i.importedAt))} · ${esc(i.filename)} · ${fmt(i.campaigns)} campaigns</p>`).join('')}`).join('')}</details><footer>Reports are snapshots, not live availability. Accept campaigns yourself in Amazon.<br>Saved compressed datasets: ${(saved.reduce((n,h)=>n+Number(h.summary.compressedBytes??0),0)/1048576).toFixed(1)} MB before database overhead. Full historical weekly reports are not retained.</footer></main>`;
+ banner();renderResults();
+ document.querySelector('#logout')!.addEventListener('click',async()=>{await client?.auth.signOut();location.reload();});
+ document.querySelector('#reload')!.addEventListener('click',()=>location.reload());
+ document.querySelectorAll<HTMLInputElement>('[data-upload]').forEach(input=>input.addEventListener('change',()=>{if(input.files?.[0])void upload(input.dataset.upload as 'accepted'|'active',input.files[0]);}));
+ document.querySelector('#watch-form')!.addEventListener('submit',e=>{e.preventDefault();try{const list=manualAsins((document.querySelector('#asins') as HTMLTextAreaElement).value),note=(document.querySelector('#note') as HTMLInputElement).value.trim();const merged=new Map(controls.watches.map(w=>[w.asin,w]));for(const asin of list)merged.set(asin,{asin,note,paused:false});void updateControls({...controls,watches:[...merged.values()],excluded:controls.excluded.filter(a=>!list.includes(a))});}catch(e){error=(e as Error).message;banner();}});
+ document.querySelectorAll<HTMLElement>('[data-pause]').forEach(el=>el.addEventListener('click',()=>void updateControls({...controls,watches:controls.watches.map(w=>w.asin===el.dataset.pause?{...w,paused:!w.paused}:w)})));
+ document.querySelectorAll<HTMLElement>('[data-remove]').forEach(el=>el.addEventListener('click',()=>void updateControls({...controls,watches:controls.watches.filter(w=>w.asin!==el.dataset.remove),excluded:[...new Set([...controls.excluded,el.dataset.remove!])]})));
+ document.querySelectorAll<HTMLElement>('[data-restore]').forEach(el=>el.addEventListener('click',()=>void updateControls({...controls,excluded:controls.excluded.filter(a=>a!==el.dataset.restore)})));
+ let timer:ReturnType<typeof setTimeout>;document.querySelector<HTMLInputElement>('#search')!.addEventListener('input',e=>{clearTimeout(timer);filters.query=(e.target as HTMLInputElement).value;filters.page=0;timer=setTimeout(()=>void query().catch(e=>{error=e.message;banner();}),250);});
+ document.querySelectorAll<HTMLInputElement>('[data-filter]').forEach(el=>el.addEventListener('change',()=>{const k=el.dataset.filter as 'manual'|'available'|'newOnly'|'hideReviewed';filters[k]=el.checked;filters.page=0;void query();}));
+}
+function renderResults(){const target=document.querySelector('#results');if(!target)return;
+ target.innerHTML=`<p class="count">${fmt(view.total)} matches · page ${filters.page+1} of ${Math.max(1,Math.ceil(view.total/50))}</p>${!view.active||!view.accepted?'<div class="empty">Upload both reports to establish your baseline. Manually watched products can also match an active report.</div>':''}${!view.matches.length?'<div class="empty">No matches with these filters.</div>':view.matches.map(m=>`<article class="match"><div class="match-body"><div class="tags"><span>${isAvailable(m.campaign as Campaign,today())?'Available':'Full / unfunded / not started'}</span>${m.manual?'<span>Manual watch</span>':''}${m.event!=='existing'?`<span class="accent">${m.event==='new'?'New campaign':'Reopened'}</span>`:''}${m.reviewed?'<span>Reviewed</span>':''}</div><h3>${esc(m.campaign.name)}</h3><p>${esc(m.campaign.brand)} · ${esc(m.campaign.start)} – ${esc(m.campaign.end)}</p><p>${fmt(m.campaign.slots)} slots · $${fmt(m.campaign.budget)} remaining</p><details><summary>${fmt(m.asins.length)} matching ASIN(s)</summary><div class="asin-links">${m.asins.slice(0,100).map(a=>`<a href="https://www.amazon.com/dp/${a}" target="_blank" rel="noopener noreferrer">${a}</a><button class="small" data-exclude="${a}" ${busy?'disabled':''}>Exclude</button>`).join('')}${m.asins.length>100?'<p>Showing the first 100 matches.</p>':''}</div></details></div><div class="match-action"><strong>${m.campaign.rate}%</strong><span>bonus commission</span><a class="button" href="https://affiliate-program.amazon.com/p/connect" target="_blank" rel="noopener noreferrer">Open Creator Connections ↗</a><button class="quiet small" data-copy="${esc(m.campaign.id)}">Copy campaign ID</button><button class="quiet small" data-review="${esc(m.campaign.id)}" ${busy?'disabled':''}>${m.reviewed?'Mark unread':'Mark reviewed'}</button></div></article>`).join('')}<div class="pagination"><button id="prev" ${filters.page===0?'disabled':''}>Previous</button><button id="next" ${(filters.page+1)*50>=view.total?'disabled':''}>Next</button></div>`;
+ target.querySelector('#prev')!.addEventListener('click',()=>{filters.page--;void query();});target.querySelector('#next')!.addEventListener('click',()=>{filters.page++;void query();});
+ target.querySelectorAll<HTMLElement>('[data-review]').forEach(el=>el.addEventListener('click',()=>{const id=el.dataset.review!;void updateControls({...controls,reviewed:controls.reviewed.includes(id)?controls.reviewed.filter(x=>x!==id):[...controls.reviewed,id]});}));
+ target.querySelectorAll<HTMLElement>('[data-copy]').forEach(el=>el.addEventListener('click',()=>{void navigator.clipboard.writeText(el.dataset.copy!).then(()=>status('Campaign ID copied.')).catch(()=>{error='Clipboard permission was denied.';banner();});}));
+ target.querySelectorAll<HTMLElement>('[data-exclude]').forEach(el=>el.addEventListener('click',()=>void updateControls({...controls,excluded:[...new Set([...controls.excluded,el.dataset.exclude!])]})));
+}
+async function start(){
+ if(!client){app.innerHTML='<main class="login"><div class="eyebrow">CREATOR CAMPAIGN MONITOR</div><h1>Connect your database.</h1><p>Set VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY in your Cloudflare build settings, then rebuild. See README for the migration and owner login setup.</p></main>';return;}
+ const {data,error:sessionError}=await client.auth.getSession();
+ if(sessionError){app.textContent=sessionError.message;return;}
+ if(data.session){await restore();return;}
+ app.innerHTML='<main class="login"><div class="eyebrow">CREATOR CAMPAIGN MONITOR</div><h1>Your next opportunity<br><span>starts here.</span></h1><p>Sign in to your private campaign watchlist.</p><form id="login"><label>Email<input name="email" type="email" autocomplete="username" required></label><label>Password<input name="password" type="password" autocomplete="current-password" required></label><button>Sign in</button><p id="login-error" role="alert"></p></form></main>';
+ document.querySelector('#login')!.addEventListener('submit',async e=>{e.preventDefault();const form=e.target as HTMLFormElement,fields=new FormData(form);const button=form.querySelector('button')!;button.disabled=true;try{const {error}=await client!.auth.signInWithPassword({email:String(fields.get('email')),password:String(fields.get('password'))});if(error)throw error;await restore();}catch(e){document.querySelector('#login-error')!.textContent=(e as Error).message;button.disabled=false;}});
+}
+client?.auth.onAuthStateChange(event=>{if(event==='SIGNED_OUT')location.reload();});
+void start();
