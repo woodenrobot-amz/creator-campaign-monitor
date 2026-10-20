@@ -1,6 +1,7 @@
+import {publicSupabase} from '../../config';
 import {createClient} from '@supabase/supabase-js';
 import type {Kind} from '../../model';
-const url=import.meta.env.VITE_SUPABASE_URL, key=import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+const url=import.meta.env.VITE_SUPABASE_URL || publicSupabase.url, key=import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || publicSupabase.publishableKey;
 export const client=url&&key?createClient(url,key):null;
 export interface Head {kind:Kind;batch_id:string;summary:Record<string,unknown>;updated_at:string}
 const db=()=>{if(!client)throw new Error('Supabase configuration is required.');return client;};

@@ -14,14 +14,14 @@ A standalone private app for weekly Amazon Creator Connections report comparison
 
 ## Infrastructure
 
-New private GitHub repository: `creator-campaign-monitor`. Deploy the static Vite build to Cloudflare Workers static assets or Cloudflare Pages. Supabase provides password authentication and private compressed datasets. No service-role secret belongs in the app.
+GitHub repository: `woodenrobot-amz/creator-campaign-monitor`. Deploy the static Vite build to Cloudflare Workers static assets or Cloudflare Pages. Supabase provides password authentication and private compressed datasets. No service-role secret belongs in the app.
 
 ### Supabase setup
 
-1. Create a separate Supabase project. If the account has reached the two-project Free limit, resolve that before creating it. Do not delete or pause existing apps without choosing to do so.
-2. Run `supabase/migrations/202610200001_campaign_datasets.sql` in that project's SQL editor, or apply it through the Supabase CLI migration workflow.
-3. Disable public signups and create the owner user in Supabase Authentication. The app has no signup screen. Each user's data is protected by owner-specific RLS; do not share an owner login.
-4. Copy the project URL and publishable key into `.env.local` using `.env.example`. Both are public browser configuration; never supply a service-role key.
+1. This deployment uses the existing `income-stream-tracker` Supabase project (`xyafiajhxyfpopwwfybq`). Campaign Monitor is a separate application with its own `monitor_*` tables. Existing income tables are not modified.
+2. Both SQL migrations in `supabase/migrations/` have been applied to that project. For a new destination, apply both in order.
+3. Sign in using the existing Income Tracker Supabase login. The app has no signup screen. Each user's data is protected by owner-specific RLS. Existing Auth settings are unchanged.
+4. The public Supabase URL and publishable key are configured in `src/config.ts`. Optional `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY` build variables override them for another project. Never supply a service-role key.
 5. Configure the deployed domain in Supabase Auth settings. Use the dashboard to manage the owner's password; password recovery UI is not included in this first version.
 
 ### Local development
@@ -30,7 +30,6 @@ Node 22+:
 
 ```sh
 npm ci
-cp .env.example .env.local
 npm run dev
 ```
 
@@ -40,10 +39,10 @@ For Workers Builds connected to the GitHub repository:
 
 - Build command: `npm ci && npm run build`
 - Deploy command: `npm run deploy`
-- Add `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY` as **build** variables; Vite embeds these public values during the build.
-- `wrangler.jsonc` deploys `dist/` with SPA fallback. With no variables configured, the app shows a setup screen and cannot access data.
+- No environment variables are needed for the configured shared project. Optional `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY` overrides are **build** variables; Vite embeds these public values during the build.
+- `wrangler.jsonc` deploys `dist/` with SPA fallback. The configured project uses the existing owner login.
 
-For Cloudflare Pages, use build command `npm run build`, output directory `dist`, and the same build variables. No custom domain is required.
+For Cloudflare Pages, use build command `npm run build`, output directory `dist`, with no environment variables required for the configured project. No custom domain is required.
 
 ## Data size and persistence
 

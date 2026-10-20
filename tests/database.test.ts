@@ -10,6 +10,7 @@ beforeAll(async()=>{
  db=new PGlite();
  await db.exec(`create role authenticated; create role anon; create schema auth; create table auth.users(id uuid primary key); insert into auth.users values('${owner}'),('${other}'); create function auth.uid() returns uuid language sql stable as $$select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid$$; grant usage on schema auth to authenticated; grant execute on function auth.uid() to authenticated;`);
  await db.exec(readFileSync(new URL('../supabase/migrations/202610200001_campaign_datasets.sql',import.meta.url),'utf8'));
+ await db.exec(readFileSync(new URL('../supabase/migrations/202610200002_restrict_publish_execution.sql',import.meta.url),'utf8'));
  await db.exec(`set role authenticated; set request.jwt.claim.sub='${owner}';`);
 },20000);
 afterAll(async()=>{await db?.close();});
